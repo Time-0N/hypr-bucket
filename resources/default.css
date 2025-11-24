@@ -1,0 +1,163 @@
+@define-color window_bg_color #1f1f28;
+
+* {
+  all: unset;
+  font-family: "Geist Mono", monospace;
+}
+
+window {
+  background-color: rgba(0, 0, 0, 0);
+  border-radius: 16px;
+}
+
+box {
+  background-color: rgba(0, 0, 0, 0);
+}
+
+.hyprbucket-wrapper {
+  background-color: rgba(0, 0, 0, 0);
+  padding: 0px;
+  margin: 0px;
+}
+
+.hyprbucket-panel {
+  background: alpha(@window_bg_color, 0.8);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0px;
+  margin: 0px;
+  min-width: 500px;
+  outline: 0px solid transparent;
+}
+
+.hyprbucket-panel>* {
+  padding: 16px;
+}
+
+
+.search-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #e0e0e0;
+  min-height: 40px;
+  caret-color: #e0e0e0;
+}
+
+.search-input:focus {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.search-input text selection {
+  background-color: rgba(137, 180, 250, 0.5);
+  color: #1e1e2e;
+}
+
+scrolledwindow {
+  background: rgba(0, 0, 0, 0);
+}
+
+scrolledwindow viewport {
+  background: rgba(0, 0, 0, 0);
+}
+
+scrolledwindow overshoot {
+  background: rgba(0, 0, 0, 0);
+}
+
+scrolledwindow undershoot {
+  background: rgba(0, 0, 0, 0);
+}
+
+listview {
+  background: transparent;
+}
+
+listview row {
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+listview row:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+listview row:selected {
+  background: rgba(137, 180, 250, 0.25);
+}
+
+gridview {
+  background: transparent;
+}
+
+gridview>child {
+  padding: 2px 0;
+  margin: 0;
+}
+
+.app-row {
+  background: transparent;
+  border-radius: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  transition: background-color 150ms ease;
+  border: 2px solid transparent;
+}
+
+.app-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+child:selected .app-row {
+  background: rgba(137, 180, 250, 0.4);
+  border-color: rgba(137, 180, 250, 0.6);
+  color: #e0e0e0;
+}
+
+child:selected .app-row:hover {
+  background: rgba(137, 180, 250, 0.5);
+  border-color: rgba(137, 180, 250, 0.8);
+}
+
+.app-icon {
+  margin-right: 12px;
+}
+
+.app-name {
+  color: #e0e0e0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+child:selected .app-name {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.app-exec {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+
+.empty-label {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 14px;
+}
+
+.status-bar {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8px;
+}
+
+.status-label {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+}
+
+scrollbar {
+  display: none;
+}

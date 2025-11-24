@@ -1,19 +1,26 @@
 [package]
 name = "hypr-bucket"
-version = "0.1.0"
-edition = "2024"
-authors = ["Time ON timeon.haas@gmail.com"]
-description = "Lightweight and customizable application launcher for hyprland"
-license = "GPL 3.0"
+version = "1.0.0"
+edition = "2021"
+authors = ["Time ON <timeon.haas@gmail.com>"]
+description = "Lightweight and customizable application launcher for Hyprland"
+license = "GPL-3.0-only"
+repository = "https://github.com/Time-0N/hypr-bucket"
+homepage = "https://github.com/Time-0N/hypr-bucket"
+readme = "README.md"
+keywords = ["launcher", "hyprland", "gtk4", "search", "applications"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "hbucket"
 path = "src/main.rs"
 
 [dependencies]
-gtk4 = "0.10"
+gtk4 = { version = "0.10", features = ["v4_6", "v4_12"] }
 gtk4-layer-shell = "0.7"
 fuzzy-matcher = "0.3"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.9"
 walkdir = "2.5"
+libc = "0.2"
