@@ -18,5 +18,5 @@ pub fn search_apps(query: &str, apps: &[DesktopEntry]) -> Vec<DesktopEntry> {
         .collect();
 
     results.sort_by(|a, b| b.0.cmp(&a.0));
-    results.into_iter().map(|(_, app)| app).collect();
+    results.into_iter().map(|(_, app)| app).collect()
 }

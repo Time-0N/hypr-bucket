@@ -12,8 +12,6 @@ pub struct DesktopEntry {
 }
 
 pub fn load_desktop_entries() -> Vec<DesktopEntry> {
-    let mut entries = Vec::new();
-
     let search_dirs = vec![
         PathBuf::from("/usr/share/applications"),
         PathBuf::from(format!(
@@ -34,7 +32,7 @@ pub fn load_desktop_entries() -> Vec<DesktopEntry> {
         .map(|entry| entry.path().to_path_buf())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("desktop"))
         .filter_map(|path| parse_desktop_file(&path))
-        .collect()
+        .collect::<Vec<DesktopEntry>>()
 }
 
 fn parse_desktop_file(path: &std::path::Path) -> Option<DesktopEntry> {
