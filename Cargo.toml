@@ -1,0 +1,19 @@
+[package]
+name = "hypr-bucket"
+version = "0.1.0"
+edition = "2024"
+authors = ["Time ON timeon.haas@gmail.com"]
+description = "Lightweight and customizable application launcher for hyprland"
+license = "GPL 3.0"
+
+[[bin]]
+name = "hbucket"
+path = "src/main.rs"
+
+[dependencies]
+gtk4 = "0.10"
+gtk4-layer-shell = "0.7"
+fuzzy-matcher = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+walkdir = "2.5"
