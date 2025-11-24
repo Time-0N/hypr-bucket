@@ -1,10 +1,4 @@
-use gtk4::{
-    Application, ApplicationWindow,
-    gio::prelude::{ApplicationExt, ApplicationExtManual},
-    glib,
-    prelude::{GtkWindowExt, WidgetExt},
-    subclass::window,
-};
+use gtk4::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 mod config;
@@ -29,20 +23,22 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Hypr Bucket")
-        .default_width(600)
-        .default_height(400)
+        .default_width(700)
+        .default_height(500)
         .build();
 
     window.init_layer_shell();
-
     window.set_layer(Layer::Overlay);
-
     window.set_keyboard_mode(KeyboardMode::Exclusive);
 
     window.set_anchor(Edge::Top, false);
     window.set_anchor(Edge::Bottom, false);
     window.set_anchor(Edge::Left, false);
     window.set_anchor(Edge::Right, false);
+
+    window.auto_exclusive_zone_enable();
+
+    window.set_namespace("hyprbucket");
 
     let content = ui::build_content();
     window.set_child(Some(&content));
@@ -60,11 +56,12 @@ fn setup_keybinds(window: &ApplicationWindow) {
     key_controller.connect_key_pressed(move |_, keyval, _, _| {
         use gtk4::gdk::Key;
 
-        if keyval == Key::Escape {
-            window_clone.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+        match keyval {
+            Key::Escape => {
+                window_clone.close();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
         }
     });
 

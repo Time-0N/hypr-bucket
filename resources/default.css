@@ -1,0 +1,123 @@
+/* ============================================================================
+   WINDOW
+   ============================================================================ */
+window {
+    background: rgba(24, 24, 37, 0.95);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ============================================================================
+   SEARCH INPUT
+   ============================================================================ */
+.search-input {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 15px;
+    color: #e0e0e0;
+    min-height: 44px;
+    caret-color: #89b4fa;
+}
+
+.search-input:focus {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: #89b4fa;
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+}
+
+.search-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+/* ============================================================================
+   SEPARATOR
+   ============================================================================ */
+.separator {
+    background: rgba(255, 255, 255, 0.08);
+    min-height: 1px;
+}
+
+/* ============================================================================
+   APP LIST
+   ============================================================================ */
+.app-list {
+    background: transparent;
+    padding: 8px 0;
+}
+
+.app-list row {
+    background: transparent;
+    border-radius: 8px;
+    padding: 0;
+}
+
+.app-list row:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.app-list row:selected {
+    background: rgba(137, 180, 250, 0.2);
+}
+
+/* ============================================================================
+   APP ROW
+   ============================================================================ */
+.app-row {
+    padding: 10px 12px;
+}
+
+.app-icon {
+    margin-right: 4px;
+}
+
+.app-name {
+    color: #e0e0e0;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.app-exec {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+}
+
+/* ============================================================================
+   EMPTY STATE
+   ============================================================================ */
+.empty-label {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 14px;
+}
+
+/* ============================================================================
+   STATUS BAR
+   ============================================================================ */
+.status-bar {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 8px;
+}
+
+.status-label {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 11px;
+}
+
+/* ============================================================================
+   SCROLLBAR
+   ============================================================================ */
+scrollbar {
+    background: transparent;
+}
+
+scrollbar slider {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    min-width: 6px;
+    min-height: 40px;
+}
+
+scrollbar slider:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
