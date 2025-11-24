@@ -1,4 +1,10 @@
-use gtk4::prelude::*;
+use gtk4::{
+    Application, ApplicationWindow,
+    gio::prelude::{ApplicationExt, ApplicationExtManual},
+    glib,
+    prelude::{GtkWindowExt, WidgetExt},
+    subclass::window,
+};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 mod config;
