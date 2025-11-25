@@ -89,22 +89,27 @@ fn setup_click_to_close(window: &ApplicationWindow) {
 fn load_styles() {
     let provider = gtk4::CssProvider::new();
 
-    if let Ok(home) = std::env::var("HOME") {
-        let user_css = format!("{}/.config/{}/default.css", home, APP_NAME);
+    let css_loaded = if let Ok(home) = std::env::var("HOME") {
+        let user_css_path = format!("{}/.config/{}/style.css", home, APP_NAME);
 
-        if Path::new(&user_css).exists() {
-            provider.load_from_path(&user_css);
-        } else {
-            let default_css = "resources/default.css";
-            if Path::new(default_css).exists() {
-                provider.load_from_path(default_css);
+        if Path::new(&user_css_path).exists() {
+            if let Ok(content) = std::fs::read_to_string(&user_css_path) {
+                provider.load_from_bytes(&gtk4::glib::Bytes::from_owned(content.into_bytes()));
+                true
+            } else {
+                false
             }
+        } else {
+            false
         }
     } else {
-        let default_css = "resources/default.css";
-        if Path::new(default_css).exists() {
-            provider.load_from_path(default_css);
-        }
+        false
+    };
+
+    if !css_loaded {
+        provider.load_from_bytes(&gtk4::glib::Bytes::from_static(
+            include_str!("../resources/default.css").as_bytes(),
+        ));
     }
 
     gtk4::style_context_add_provider_for_display(
