@@ -61,7 +61,9 @@ fn create_status_bar() -> Box {
     status_bar.set_margin_end(16);
     status_bar.add_css_class("status-bar");
 
-    let status_label = gtk4::Label::new(Some("↑↓ Navigate  •  Enter to launch  •  Esc to close"));
+    let status_label = gtk4::Label::new(Some(
+        "↑↓ Navigate  •  Enter to launch  •  Esc to close   •  Ctrl+p Pin",
+    ));
     status_label.add_css_class("status-label");
 
     status_bar.append(&status_label);
