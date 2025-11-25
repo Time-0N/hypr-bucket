@@ -9,8 +9,10 @@
 ## ❗️❗️❗️**Recommended** ❗️❗️❗️
 
 > If you want a better blur effect add this to your windowrules/layerrules in hyprland!
-> `layerrule = blur, hyprbucket`
-> `layerrule = ignorealpha 0.5, hyprbucket`
+
+```layerrule = blur, hyprbucket```
+
+```layerrule = ignorealpha 0.5, hyprbucket```
 
 ## Installation
 
