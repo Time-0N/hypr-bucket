@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hypr Bucket
+Comment=Lightweight application launcher for Hyprland
+Exec=hbucket
+Icon=system-search
+Categories=Utility;Launcher;
+OnlyShowIn=Hyprland;
+NoDisplay=false
