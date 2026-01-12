@@ -1,13 +1,25 @@
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
 use gtk4::{
-    gio::ListStore, glib::Object, prelude::*, subclass::prelude::*, Box, Entry, GridView, ListItem,
-    ListScrollFlags, Orientation, ScrolledWindow, SignalListItemFactory, SingleSelection,
+    gio::ListStore,
+    glib::{self, Object},
+    prelude::*,
+    subclass::prelude::*,
+    Box, Entry, GridView, ListItem, ListScrollFlags, Orientation, ScrolledWindow,
+    SignalListItemFactory, SingleSelection,
 };
 
 pub mod components;
-
 pub use components::{create_app_row, populate_app_row};
+
+use crate::desktop::{DesktopEntry, LoaderMsg};
+
+#[derive(Default)]
+struct RebuildTimer {
+    id: Option<glib::SourceId>,
+}
+
+type EntryStore = Rc<RefCell<HashMap<String, DesktopEntry>>>;
 
 pub fn build_content() -> (Box, ListStore) {
     let container = Box::new(Orientation::Vertical, 0);
@@ -18,8 +30,9 @@ pub fn build_content() -> (Box, ListStore) {
     let (search_box, search_entry) = create_search_box();
     container.append(&search_box);
 
-    let all_entries = crate::desktop::load_desktop_entries();
-    let (list_view, model) = create_virtual_list(&all_entries);
+    let store: EntryStore = Rc::new(RefCell::new(HashMap::new()));
+
+    let (list_view, model) = create_virtual_list();
 
     let scrolled = ScrolledWindow::new();
     scrolled.set_vexpand(true);
@@ -27,13 +40,14 @@ pub fn build_content() -> (Box, ListStore) {
     scrolled.set_min_content_height(400);
     scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
     scrolled.set_child(Some(&list_view));
-
     container.append(&scrolled);
 
     let status_bar = create_status_bar();
     container.append(&status_bar);
 
-    setup_search(&search_entry, &model, &list_view, all_entries);
+    setup_search(&search_entry, &model, &list_view, store.clone());
+    start_loader(&search_entry, &model, &list_view, store);
+
     (container, model)
 }
 
@@ -68,26 +82,11 @@ fn create_status_bar() -> Box {
     status_bar
 }
 
-fn create_virtual_list(entries: &[crate::desktop::DesktopEntry]) -> (GridView, ListStore) {
+fn create_virtual_list() -> (GridView, ListStore) {
     let model = ListStore::new::<AppEntryObject>();
-
-    let config = crate::config::Config::load();
-    let (mut pinned, unpinned): (Vec<_>, Vec<_>) = entries
-        .iter()
-        .cloned()
-        .partition(|app| config.pinned.contains(&app.id));
-
-    pinned.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-    pinned
-        .iter()
-        .chain(unpinned.iter())
-        .map(|entry| AppEntryObject::new(entry))
-        .for_each(|obj| model.append(&obj));
 
     let selection = SingleSelection::new(Some(model.clone()));
     selection.set_autoselect(true);
-    selection.set_selected(0);
 
     let factory = SignalListItemFactory::new();
 
@@ -113,21 +112,16 @@ fn create_virtual_list(entries: &[crate::desktop::DesktopEntry]) -> (GridView, L
             .child()
             .and_downcast::<Box>()
             .expect("Box expected");
-
         populate_app_row(&row, &entry_obj);
     });
 
     let grid_view = GridView::new(Some(selection), Some(factory));
-
     grid_view.set_max_columns(1);
     grid_view.set_min_columns(1);
-
     grid_view.set_single_click_activate(true);
-
     grid_view.set_can_target(false);
 
     setup_selection_scroll(&grid_view);
-
     setup_activation(&grid_view);
 
     (grid_view, model)
@@ -139,58 +133,39 @@ fn setup_selection_scroll(grid_view: &GridView) {
     if let Some(model) = grid_view.model() {
         if let Some(selection) = model.downcast_ref::<SingleSelection>() {
             selection.connect_selection_changed(move |_, _, _| {
-                let grid_view = &grid_view_clone;
-                grid_view.scroll_to(
-                    grid_view
-                        .model()
-                        .and_then(|m| m.downcast_ref::<SingleSelection>().map(|s| s.selected()))
-                        .unwrap_or(u32::MAX),
-                    ListScrollFlags::NONE,
-                    None,
-                );
+                let selected = grid_view_clone
+                    .model()
+                    .and_then(|m| m.downcast_ref::<SingleSelection>().map(|s| s.selected()))
+                    .unwrap_or(u32::MAX);
+                if selected != u32::MAX {
+                    grid_view_clone.scroll_to(selected, ListScrollFlags::NONE, None);
+                }
             });
         }
     }
 }
 
-fn setup_search(
-    search_entry: &Entry,
-    model: &ListStore,
-    grid_view: &GridView,
-    all_entries: Vec<crate::desktop::DesktopEntry>,
-) {
-    let all_entries = Rc::new(all_entries);
+fn setup_search(search_entry: &Entry, model: &ListStore, grid_view: &GridView, store: EntryStore) {
     let model = model.clone();
     let grid_view = grid_view.clone();
+    let last_query = Rc::new(RefCell::new(String::new()));
 
     search_entry.connect_changed(move |entry| {
         let query = entry.text().to_string();
-        let config = crate::config::Config::load();
 
-        model.remove_all();
+        let was_empty = last_query.borrow().is_empty();
+        let is_empty = query.is_empty();
+        *last_query.borrow_mut() = query.clone();
 
-        let filtered = if query.is_empty() {
-            all_entries.as_ref().clone()
-        } else {
-            crate::search::search_apps(&query, &all_entries)
-        };
+        rebuild_model(&model, &grid_view, &store.borrow(), &query);
 
-        let (mut pinned, unpinned): (Vec<_>, Vec<_>) = filtered
-            .into_iter()
-            .partition(|app| config.pinned.contains(&app.id));
-
-        pinned.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-        pinned
-            .iter()
-            .chain(unpinned.iter())
-            .map(AppEntryObject::new)
-            .for_each(|obj| model.append(&obj));
-
-        if let Some(selection_model) = grid_view.model() {
-            if let Some(selection) = selection_model.downcast_ref::<SingleSelection>() {
-                selection.set_selected(0);
+        if is_empty && !was_empty && model.n_items() > 0 {
+            if let Some(sel_model) = grid_view.model() {
+                if let Some(selection) = sel_model.downcast_ref::<SingleSelection>() {
+                    selection.set_selected(0);
+                }
             }
+            grid_view.scroll_to(0, ListScrollFlags::NONE, None);
         }
     });
 
@@ -203,6 +178,145 @@ fn setup_activation(grid_view: &GridView) {
     grid_view.connect_activate(move |_, _| {
         launch_selected(&grid_view_clone);
     });
+}
+
+fn start_loader(search_entry: &Entry, model: &ListStore, grid_view: &GridView, store: EntryStore) {
+    let (tx, rx) = async_channel::unbounded::<LoaderMsg>();
+    crate::desktop::spawn_load_entries(tx);
+
+    let search_entry = search_entry.clone();
+    let model = model.clone();
+    let grid_view = grid_view.clone();
+
+    let timer = Rc::new(RefCell::new(RebuildTimer::default()));
+
+    let schedule_rebuild = {
+        let timer = timer.clone();
+        let search_entry = search_entry.clone();
+        let model = model.clone();
+        let grid_view = grid_view.clone();
+        let store = store.clone();
+
+        move || {
+            if timer.borrow().id.is_some() {
+                return;
+            }
+
+            let timer2 = timer.clone();
+            let search_entry2 = search_entry.clone();
+            let model2 = model.clone();
+            let grid_view2 = grid_view.clone();
+            let store2 = store.clone();
+
+            let id = glib::timeout_add_local(Duration::from_millis(50), move || {
+                let query = search_entry2.text().to_string();
+                rebuild_model(&model2, &grid_view2, &store2.borrow(), &query);
+
+                timer2.borrow_mut().id = None;
+                glib::ControlFlow::Break
+            });
+
+            timer.borrow_mut().id = Some(id);
+        }
+    };
+
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(msg) = rx.recv().await {
+            let done = matches!(&msg, LoaderMsg::Done);
+
+            {
+                let mut map = store.borrow_mut();
+                match msg {
+                    LoaderMsg::Batch(apps) => {
+                        for app in apps {
+                            map.insert(app.id.clone(), app);
+                        }
+                    }
+                    LoaderMsg::App(app) => {
+                        map.insert(app.id.clone(), app);
+                    }
+                    LoaderMsg::Remove(ids) => {
+                        for id in ids {
+                            map.remove(&id);
+                        }
+                    }
+                    LoaderMsg::Done => {}
+                }
+            }
+
+            if done {
+                if let Some(id) = timer.borrow_mut().id.take() {
+                    id.remove();
+                }
+                let query = search_entry.text().to_string();
+                rebuild_model(&model, &grid_view, &store.borrow(), &query);
+                break;
+            } else {
+                schedule_rebuild();
+            }
+        }
+    });
+}
+
+fn rebuild_model(
+    model: &ListStore,
+    grid_view: &GridView,
+    store: &HashMap<String, DesktopEntry>,
+    query: &str,
+) {
+    let prev_selected_id: Option<String> = grid_view
+        .model()
+        .and_then(|m| m.downcast::<SingleSelection>().ok())
+        .and_then(|sel| sel.selected_item())
+        .and_then(|item| item.downcast::<AppEntryObject>().ok())
+        .map(|obj| obj.entry().id);
+
+    let mut all: Vec<DesktopEntry> = store.values().cloned().collect();
+
+    if query.is_empty() {
+        all.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    }
+
+    let filtered: Vec<DesktopEntry> = if query.is_empty() {
+        all
+    } else {
+        crate::search::search_apps(query, &all)
+    };
+
+    let config = crate::config::Config::load();
+    let (mut pinned, unpinned): (Vec<_>, Vec<_>) = filtered
+        .into_iter()
+        .partition(|app| config.pinned.contains(&app.id));
+
+    pinned.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    model.remove_all();
+
+    let mut idx: u32 = 0;
+    let mut new_selected: Option<u32> = None;
+
+    for app in pinned.iter().chain(unpinned.iter()) {
+        if new_selected.is_none() {
+            if let Some(ref want) = prev_selected_id {
+                if &app.id == want {
+                    new_selected = Some(idx);
+                }
+            }
+        }
+        model.append(&AppEntryObject::new(app));
+        idx += 1;
+    }
+
+    if let Some(sel_model) = grid_view.model() {
+        if let Some(selection) = sel_model.downcast_ref::<SingleSelection>() {
+            let sel = if model.n_items() == 0 {
+                u32::MAX
+            } else {
+                new_selected.unwrap_or(0)
+            };
+            selection.set_selected(sel);
+        }
+    }
 }
 
 fn launch_selected(grid_view: &GridView) {

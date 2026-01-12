@@ -30,7 +30,7 @@ pub fn build_ui(app: &Application) {
     wrapper.set_overflow(gtk4::Overflow::Hidden);
     wrapper.add_css_class("hyprbucket-wrapper");
 
-    let (content, model) = ui::build_content();
+    let (content, _model) = ui::build_content();
     content.add_css_class("hyprbucket-panel");
 
     wrapper.append(&content);
@@ -43,13 +43,6 @@ pub fn build_ui(app: &Application) {
     keybinds::setup_keybinds(&window, grid_view.as_ref());
 
     window.present();
-
-    crate::desktop::refresh_desktop_entries_async(move |new_apps| {
-        for app in new_apps {
-            let obj = ui::AppEntryObject::new(&app);
-            model.append(&obj);
-        }
-    });
 }
 
 fn setup_layer_shell(window: &ApplicationWindow) {
