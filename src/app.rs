@@ -83,7 +83,10 @@ fn load_styles() {
     let provider = gtk4::CssProvider::new();
 
     if let Ok(home) = std::env::var("HOME") {
-        let user_css = format!("{}/.config/{}/default.css", home, APP_NAME);
+        let user_css = std::path::PathBuf::from(&home)
+            .join(".config")
+            .join(APP_NAME)
+            .join("default.css");
 
         if Path::new(&user_css).exists() {
             provider.load_from_path(&user_css);

@@ -62,9 +62,6 @@ pub fn build_content() -> (Box, ListStore, UiRebuildController) {
     let status_bar = create_status_bar();
     container.append(&status_bar);
 
-    setup_search(&search_entry, &model, &list_view, store.clone());
-    start_loader(&search_entry, &model, &list_view, store.clone());
-
     let rebuild_controller = UiRebuildController::new({
         let model = model.clone();
         let grid_view = list_view.clone();
@@ -75,6 +72,14 @@ pub fn build_content() -> (Box, ListStore, UiRebuildController) {
             rebuild_model(&model, &grid_view, &store.borrow(), &query);
         }
     });
+
+    setup_search(
+        &search_entry,
+        &model,
+        &list_view,
+        rebuild_controller.clone(),
+    );
+    start_loader(store.clone(), rebuild_controller.clone());
 
     (container, model, rebuild_controller)
 }
@@ -103,7 +108,9 @@ fn create_status_bar() -> Box {
     status_bar.set_margin_end(16);
     status_bar.add_css_class("status-bar");
 
-    let status_label = gtk4::Label::new(Some("↑↓ Navigate  •  Enter to launch  •  Esc to close"));
+    let status_label = gtk4::Label::new(Some(
+        "↑↓ Navigate  •  Enter to launch  •  Esc to close   •  Ctrl+p Pin",
+    ));
     status_label.add_css_class("status-label");
 
     status_bar.append(&status_label);
@@ -173,7 +180,12 @@ fn setup_selection_scroll(grid_view: &GridView) {
     }
 }
 
-fn setup_search(search_entry: &Entry, model: &ListStore, grid_view: &GridView, store: EntryStore) {
+fn setup_search(
+    search_entry: &Entry,
+    model: &ListStore,
+    grid_view: &GridView,
+    ui: UiRebuildController,
+) {
     let model = model.clone();
     let grid_view = grid_view.clone();
     let last_query = Rc::new(RefCell::new(String::new()));
@@ -183,9 +195,9 @@ fn setup_search(search_entry: &Entry, model: &ListStore, grid_view: &GridView, s
 
         let was_empty = last_query.borrow().is_empty();
         let is_empty = query.is_empty();
-        *last_query.borrow_mut() = query.clone();
+        *last_query.borrow_mut() = query;
 
-        rebuild_model(&model, &grid_view, &store.borrow(), &query);
+        ui.rebuild();
 
         if is_empty && !was_empty && model.n_items() > 0 {
             if let Some(sel_model) = grid_view.model() {
@@ -208,22 +220,15 @@ fn setup_activation(grid_view: &GridView) {
     });
 }
 
-fn start_loader(search_entry: &Entry, model: &ListStore, grid_view: &GridView, store: EntryStore) {
+fn start_loader(store: EntryStore, ui: UiRebuildController) {
     let (tx, rx) = async_channel::unbounded::<LoaderMsg>();
     crate::desktop::spawn_load_entries(tx);
-
-    let search_entry = search_entry.clone();
-    let model = model.clone();
-    let grid_view = grid_view.clone();
 
     let timer = Rc::new(RefCell::new(RebuildTimer::default()));
 
     let schedule_rebuild = {
         let timer = timer.clone();
-        let search_entry = search_entry.clone();
-        let model = model.clone();
-        let grid_view = grid_view.clone();
-        let store = store.clone();
+        let ui = ui.clone();
 
         move || {
             if timer.borrow().id.is_some() {
@@ -231,14 +236,10 @@ fn start_loader(search_entry: &Entry, model: &ListStore, grid_view: &GridView, s
             }
 
             let timer2 = timer.clone();
-            let search_entry2 = search_entry.clone();
-            let model2 = model.clone();
-            let grid_view2 = grid_view.clone();
-            let store2 = store.clone();
+            let ui2 = ui.clone();
 
             let id = glib::timeout_add_local(Duration::from_millis(50), move || {
-                let query = search_entry2.text().to_string();
-                rebuild_model(&model2, &grid_view2, &store2.borrow(), &query);
+                ui2.rebuild();
 
                 timer2.borrow_mut().id = None;
                 glib::ControlFlow::Break
@@ -276,8 +277,7 @@ fn start_loader(search_entry: &Entry, model: &ListStore, grid_view: &GridView, s
                 if let Some(id) = timer.borrow_mut().id.take() {
                     id.remove();
                 }
-                let query = search_entry.text().to_string();
-                rebuild_model(&model, &grid_view, &store.borrow(), &query);
+                ui.rebuild();
                 break;
             } else {
                 schedule_rebuild();
@@ -320,19 +320,20 @@ fn rebuild_model(
 
     model.remove_all();
 
-    let mut idx: u32 = 0;
     let mut new_selected: Option<u32> = None;
 
-    for app in pinned.iter().chain(unpinned.iter()) {
+    for (i, app) in pinned.iter().chain(unpinned.iter()).enumerate() {
+        let idx = i as u32;
+
         if new_selected.is_none() {
             if let Some(ref want) = prev_selected_id {
-                if &app.id == want {
+                if app.id == *want {
                     new_selected = Some(idx);
                 }
             }
         }
+
         model.append(&AppEntryObject::new(app));
-        idx += 1;
     }
 
     if let Some(sel_model) = grid_view.model() {
