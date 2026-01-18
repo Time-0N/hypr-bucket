@@ -21,7 +21,24 @@ struct RebuildTimer {
 
 type EntryStore = Rc<RefCell<HashMap<String, DesktopEntry>>>;
 
-pub fn build_content() -> (Box, ListStore) {
+#[derive(Clone)]
+pub struct UiRebuildController {
+    rebuild: Rc<dyn Fn()>,
+}
+
+impl UiRebuildController {
+    pub fn new(rebuild: impl Fn() + 'static) -> Self {
+        Self {
+            rebuild: Rc::new(rebuild),
+        }
+    }
+
+    pub fn rebuild(&self) {
+        (self.rebuild)();
+    }
+}
+
+pub fn build_content() -> (Box, ListStore, UiRebuildController) {
     let container = Box::new(Orientation::Vertical, 0);
     container.set_hexpand(false);
     container.set_vexpand(false);
@@ -46,9 +63,20 @@ pub fn build_content() -> (Box, ListStore) {
     container.append(&status_bar);
 
     setup_search(&search_entry, &model, &list_view, store.clone());
-    start_loader(&search_entry, &model, &list_view, store);
+    start_loader(&search_entry, &model, &list_view, store.clone());
 
-    (container, model)
+    let rebuild_controller = UiRebuildController::new({
+        let model = model.clone();
+        let grid_view = list_view.clone();
+        let store = store.clone();
+        let search_entry = search_entry.clone();
+        move || {
+            let query = search_entry.text().to_string();
+            rebuild_model(&model, &grid_view, &store.borrow(), &query);
+        }
+    });
+
+    (container, model, rebuild_controller)
 }
 
 fn create_search_box() -> (Box, Entry) {
