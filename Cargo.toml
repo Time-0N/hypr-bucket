@@ -1,6 +1,6 @@
 [package]
 name = "hypr-bucket"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 authors = ["Time ON <timeon.haas@gmail.com>"]
 description = "Lightweight and customizable application launcher for Hyprland"

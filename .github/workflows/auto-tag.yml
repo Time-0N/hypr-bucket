@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "Cargo.toml"
+      - Cargo.toml
+      - Cargo.lock
 
 permissions:
   contents: write
@@ -19,6 +20,13 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Verify lockfile is valid (no compile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo --version
+          cargo metadata --locked --format-version 1 >/dev/null
+
       - name: Read version from Cargo.toml
         id: ver
         shell: bash
@@ -27,7 +35,7 @@ jobs:
           VERSION="$(python3 -c 'import re; s=open("Cargo.toml","r",encoding="utf-8").read(); m=re.search(r"(?ms)^\[package\].*?^version\s*=\s*\"([^\"]+)\"", s); print(m.group(1))')"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push tag if missing
+      - name: Create and push tag if version is newer
         shell: bash
         run: |
           set -euo pipefail
@@ -37,7 +45,6 @@ jobs:
           latest_tag="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
           if [[ -n "$latest_tag" ]]; then
             latest_ver="${latest_tag#v}"
-            # If VERSION <= latest_ver, skip
             if [[ "$(printf '%s\n%s\n' "$latest_ver" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]] || [[ "$latest_ver" == "$VERSION" ]]; then
               echo "Cargo.toml version ($VERSION) is not newer than latest tag ($latest_tag); skipping."
               exit 0
@@ -51,5 +58,6 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
