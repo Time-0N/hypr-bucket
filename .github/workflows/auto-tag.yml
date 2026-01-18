@@ -1,0 +1,55 @@
+name: Auto-tag from Cargo.toml
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Read version from Cargo.toml
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import re; s=open("Cargo.toml","r",encoding="utf-8").read(); m=re.search(r"(?ms)^\[package\].*?^version\s*=\s*\"([^\"]+)\"", s); print(m.group(1))')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v$VERSION"
+
+          latest_tag="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+          if [[ -n "$latest_tag" ]]; then
+            latest_ver="${latest_tag#v}"
+            # If VERSION <= latest_ver, skip
+            if [[ "$(printf '%s\n%s\n' "$latest_ver" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]] || [[ "$latest_ver" == "$VERSION" ]]; then
+              echo "Cargo.toml version ($VERSION) is not newer than latest tag ($latest_tag); skipping."
+              exit 0
+            fi
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; nothing to do."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

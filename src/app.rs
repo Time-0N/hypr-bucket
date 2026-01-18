@@ -95,18 +95,23 @@ fn load_styles() {
             if Path::new(default_css).exists() {
                 provider.load_from_path(default_css);
             }
+        } else {
+            false
         }
     } else {
-        let default_css = "resources/default.css";
-        if Path::new(default_css).exists() {
-            provider.load_from_path(default_css);
-        }
+        false
+    };
+
+    if !css_loaded {
+        provider.load_from_bytes(&gtk4::glib::Bytes::from_static(
+            include_str!("../resources/default.css").as_bytes(),
+        ));
     }
 
     gtk4::style_context_add_provider_for_display(
         &gtk4::gdk::Display::default().expect("Could not get default display"),
         &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        gtk4::STYLE_PROVIDER_PRIORITY_USER,
     );
 }
 

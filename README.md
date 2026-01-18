@@ -9,8 +9,19 @@
 ## ❗️❗️❗️**Recommended** ❗️❗️❗️
 
 > If you want a better blur effect add this to your windowrules/layerrules in hyprland!
-> `layerrule = blur, hyprbucket`
-> `layerrule = ignorealpha 0.5, hyprbucket`
+
+```layerrule = blur, hyprbucket```
+
+```layerrule = ignorealpha 0.5, hyprbucket```
+
+You can style the launcher yourself by adding your own css in:
+```~/.config/hyprbucket/style.css```
+
+## Disclaimer
+
+Hypr-Bucket is **heavily inspired by**, and includes portions of code from, the excellent  
+[walker](https://github.com/abenz1267/walker) project by @abenz1267.  
+While walker offers a feature-rich and highly customizable launcher, Hypr-Bucket focuses on being **lightweight**, **optimized**.
 
 ## Installation
 
