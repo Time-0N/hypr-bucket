@@ -7,13 +7,19 @@ use gtk4::{
 };
 
 use crate::launcher;
+use crate::ui::UiRebuildController;
 
-pub fn setup_keybinds(window: &ApplicationWindow, grid_view: Option<&GridView>) {
+pub fn setup_keybinds(
+    window: &ApplicationWindow,
+    grid_view: Option<&GridView>,
+    ui_rebuild: Option<UiRebuildController>,
+) {
     let key_controller = gtk4::EventControllerKey::new();
     key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
 
     let window_weak = window.downgrade();
     let grid_view = grid_view.cloned();
+    let ui_rebuild = ui_rebuild.clone();
 
     key_controller.connect_key_pressed(move |_, keyval, _, state| match keyval {
         Key::Escape => {
@@ -57,7 +63,7 @@ pub fn setup_keybinds(window: &ApplicationWindow, grid_view: Option<&GridView>) 
         }
         Key::p | Key::P if state.contains(ModifierType::CONTROL_MASK) => {
             if let Some(ref grid_view) = grid_view {
-                crate::launcher::toggle_pin_selected(grid_view);
+                crate::launcher::toggle_pin_selected(grid_view, ui_rebuild.as_ref());
             }
             Propagation::Stop
         }

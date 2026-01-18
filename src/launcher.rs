@@ -1,7 +1,11 @@
 use gtk4::{prelude::Cast, GridView};
 use std::process::Command;
 
-use crate::{config::Config, desktop::DesktopEntry, ui::AppEntryObject};
+use crate::{
+    config::Config,
+    desktop::DesktopEntry,
+    ui::{AppEntryObject, UiRebuildController},
+};
 
 fn get_selected_entry(grid_view: &GridView) -> Option<DesktopEntry> {
     let model = grid_view.model()?;
@@ -85,7 +89,7 @@ fn find_terminal() -> &'static str {
     "sh"
 }
 
-pub fn toggle_pin_selected(grid_view: &GridView) {
+pub fn toggle_pin_selected(grid_view: &GridView, ui_rebuild: Option<&UiRebuildController>) {
     if let Some(entry) = get_selected_entry(grid_view) {
         let mut config = Config::load();
         let was_pinned = config.pinned.contains(&entry.id);
@@ -96,5 +100,9 @@ pub fn toggle_pin_selected(grid_view: &GridView) {
             if was_pinned { "Unpinned" } else { "Pinned" },
             entry.name
         );
+
+        if let Some(ui) = ui_rebuild {
+            ui.rebuild();
+        }
     }
 }

@@ -30,7 +30,7 @@ pub fn build_ui(app: &Application) {
     wrapper.set_overflow(gtk4::Overflow::Hidden);
     wrapper.add_css_class("hyprbucket-wrapper");
 
-    let (content, model) = ui::build_content();
+    let (content, _model, rebuild_controller) = ui::build_content();
     content.add_css_class("hyprbucket-panel");
 
     wrapper.append(&content);
@@ -40,16 +40,9 @@ pub fn build_ui(app: &Application) {
 
     setup_click_to_close(&window);
     setup_mouse_motion_tracking(&window, grid_view.as_ref());
-    keybinds::setup_keybinds(&window, grid_view.as_ref());
+    keybinds::setup_keybinds(&window, grid_view.as_ref(), Some(rebuild_controller));
 
     window.present();
-
-    crate::desktop::refresh_desktop_entries_async(move |new_apps| {
-        for app in new_apps {
-            let obj = ui::AppEntryObject::new(&app);
-            model.append(&obj);
-        }
-    });
 }
 
 fn setup_layer_shell(window: &ApplicationWindow) {
@@ -89,15 +82,18 @@ fn setup_click_to_close(window: &ApplicationWindow) {
 fn load_styles() {
     let provider = gtk4::CssProvider::new();
 
-    let css_loaded = if let Ok(home) = std::env::var("HOME") {
-        let user_css_path = format!("{}/.config/{}/style.css", home, APP_NAME);
+    if let Ok(home) = std::env::var("HOME") {
+        let user_css = std::path::PathBuf::from(&home)
+            .join(".config")
+            .join(APP_NAME)
+            .join("default.css");
 
-        if Path::new(&user_css_path).exists() {
-            if let Ok(content) = std::fs::read_to_string(&user_css_path) {
-                provider.load_from_bytes(&gtk4::glib::Bytes::from_owned(content.into_bytes()));
-                true
-            } else {
-                false
+        if Path::new(&user_css).exists() {
+            provider.load_from_path(&user_css);
+        } else {
+            let default_css = "resources/default.css";
+            if Path::new(default_css).exists() {
+                provider.load_from_path(default_css);
             }
         } else {
             false

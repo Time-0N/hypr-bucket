@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (example: v1.1.0)"
+        required: true
 
 permissions:
   contents: read
@@ -16,45 +21,55 @@ jobs:
   aur:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Compute version from tag
+      - name: Select tag + compute version
         id: ver
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            RAW="${{ github.event.inputs.tag }}"
+            TAG="$(printf '%s' "$RAW" | sed -E 's/^[[:space:]]*tag[[:space:]]*=[[:space:]]*//; s/^[[:space:]]+|[[:space:]]+$//g')"
+            git fetch --tags --force
+            git checkout -f "refs/tags/$TAG"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Update PKGBUILD pkgver/pkgrel
+      - name: Update PKGBUILD pkgver/pkgrel (repo root)
         shell: bash
         run: |
           set -euo pipefail
-          test -f aur/PKGBUILD
-          sed -i "s/^pkgver=.*/pkgver=${{ steps.ver.outputs.version }}/" aur/PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" aur/PKGBUILD
+          test -f PKGBUILD
+          sed -i "s/^pkgver=.*/pkgver=${{ steps.ver.outputs.version }}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
 
-      - name: Update checksums + generate .SRCINFO
+      - name: "Debug: show effective PKGBUILD fields"
         shell: bash
         run: |
           set -euo pipefail
-          docker run --rm -v "$PWD":/repo -w /repo archlinux:base-devel bash -lc '
-            pacman -Syu --noconfirm --needed pacman-contrib &&
-            cd aur &&
-            updpkgsums &&
-            makepkg --printsrcinfo > .SRCINFO
-          '
-          cp aur/.SRCINFO .SRCINFO
+          echo "Checked out:"
+          git describe --tags --always --dirty || true
+          grep -nE '^(pkgver|pkgrel|source)=' PKGBUILD
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
           pkgname: hypr-bucket
-          pkgbuild: ./aur/PKGBUILD
-          assets: |
-            .SRCINFO
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ steps.ver.outputs.version }}"
+          commit_message: "Update to ${{ steps.ver.outputs.tag }}"
           ssh_keyscan_types: rsa,ecdsa,ed25519
