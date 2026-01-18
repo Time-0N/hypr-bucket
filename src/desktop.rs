@@ -1,16 +1,122 @@
-use std::{collections::HashSet, fs, path::PathBuf, sync::mpsc};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+    thread,
+};
 
-use gtk4::glib;
-use serde_json;
+use async_channel::Sender;
 use walkdir::WalkDir;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DesktopEntry {
     pub id: String,
     pub name: String,
     pub exec: String,
     pub icon: Option<String>,
     pub terminal: bool,
+}
+
+pub enum LoaderMsg {
+    Batch(Vec<DesktopEntry>),
+    App(DesktopEntry),
+    Remove(Vec<String>),
+    Done,
+}
+
+fn application_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+        dirs.push(PathBuf::from(xdg_data_home).join("applications"));
+    } else if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/applications"));
+    }
+
+    if let Ok(xdg_data_dirs) = std::env::var("XDG_DATA_DIRS") {
+        for dir in xdg_data_dirs.split(':').filter(|s| !s.is_empty()) {
+            dirs.push(PathBuf::from(dir).join("applications"));
+        }
+    } else {
+        dirs.push(PathBuf::from("/usr/local/share/applications"));
+        dirs.push(PathBuf::from("/usr/share/applications"));
+    }
+
+    dirs
+}
+
+pub fn spawn_load_entries(sender: Sender<LoaderMsg>) {
+    thread::spawn(move || {
+        let mut cached_map: HashMap<String, DesktopEntry> = HashMap::new();
+        let mut cached_ids = HashSet::new();
+        let mut found_ids = HashSet::new();
+        let mut fresh_list = Vec::new();
+
+        if let Some(cache_path) = get_cache_path() {
+            if let Some(cached_apps) = load_cache(&cache_path) {
+                let mut unique = Vec::new();
+                for app in cached_apps {
+                    if cached_map.contains_key(&app.id) {
+                        continue;
+                    }
+                    cached_ids.insert(app.id.clone());
+                    cached_map.insert(app.id.clone(), app.clone());
+                    unique.push(app);
+                }
+                let _ = sender.send_blocking(LoaderMsg::Batch(unique));
+            }
+        }
+
+        for dir in application_dirs() {
+            if !dir.exists() {
+                continue;
+            }
+
+            for entry in WalkDir::new(dir)
+                .follow_links(true)
+                .max_depth(1)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+                    continue;
+                }
+
+                if let Some(desktop_entry) = parse_desktop_file(path) {
+                    let id = desktop_entry.id.clone();
+
+                    if !found_ids.insert(id.clone()) {
+                        continue;
+                    }
+
+                    fresh_list.push(desktop_entry.clone());
+
+                    let changed = cached_map
+                        .get(&id)
+                        .map(|c| c != &desktop_entry)
+                        .unwrap_or(true);
+
+                    if changed {
+                        let _ = sender.send_blocking(LoaderMsg::App(desktop_entry));
+                    }
+                }
+            }
+        }
+
+        let to_remove: Vec<String> = cached_ids.difference(&found_ids).cloned().collect();
+        if !to_remove.is_empty() {
+            let _ = sender.send_blocking(LoaderMsg::Remove(to_remove));
+        }
+
+        fresh_list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        if let Some(cache_path) = get_cache_path() {
+            save_cache(&cache_path, &fresh_list);
+        }
+
+        let _ = sender.send_blocking(LoaderMsg::Done);
+    });
 }
 
 fn get_cache_path() -> Option<PathBuf> {
@@ -32,108 +138,6 @@ fn save_cache(cache_path: &PathBuf, entries: &[DesktopEntry]) {
     if let Ok(json) = serde_json::to_string(entries) {
         let _ = fs::write(cache_path, json);
     }
-}
-
-pub fn load_desktop_entries() -> Vec<DesktopEntry> {
-    if let Some(cache_path) = get_cache_path() {
-        if let Some(cached) = load_cache(&cache_path) {
-            return cached;
-        }
-    }
-
-    load_desktop_entries_from_disk()
-}
-
-pub fn refresh_desktop_entries_async<F>(callback: F)
-where
-    F: Fn(Vec<DesktopEntry>) + 'static,
-{
-    let (tx, rx) = mpsc::channel();
-
-    std::thread::spawn(move || {
-        let new_entries = load_desktop_entries_from_disk();
-
-        let old_entries = if let Some(cache_path) = get_cache_path() {
-            load_cache(&cache_path).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let old_ids: HashSet<_> = old_entries.iter().map(|e| e.id.clone()).collect();
-        let newly_discovered: Vec<_> = new_entries
-            .iter()
-            .filter(|entry| !old_ids.contains(&entry.id))
-            .cloned()
-            .collect();
-
-        if let Some(cache_path) = get_cache_path() {
-            save_cache(&cache_path, &new_entries);
-        }
-
-        let _ = tx.send(newly_discovered);
-    });
-
-    glib::MainContext::default().spawn_local(async move {
-        if let Ok(newly_discovered) = rx.recv() {
-            if !newly_discovered.is_empty() {
-                callback(newly_discovered);
-            }
-        }
-    });
-}
-
-fn load_desktop_entries_from_disk() -> Vec<DesktopEntry> {
-    let mut search_dirs = Vec::new();
-
-    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
-        search_dirs.push(PathBuf::from(format!("{}/applications", xdg_data_home)));
-    } else if let Ok(home) = std::env::var("HOME") {
-        search_dirs.push(PathBuf::from(format!("{}/.local/share/applications", home)));
-    }
-
-    if let Ok(xdg_data_dirs) = std::env::var("XDG_DATA_DIRS") {
-        for dir in xdg_data_dirs.split(':') {
-            if !dir.is_empty() {
-                search_dirs.push(PathBuf::from(format!("{}/applications", dir)));
-            }
-        }
-    } else {
-        search_dirs.push(PathBuf::from("/usr/local/share/applications"));
-        search_dirs.push(PathBuf::from("/usr/share/applications"));
-    }
-
-    let mut seen_ids = HashSet::new();
-    let mut entries = Vec::new();
-
-    for dir in search_dirs {
-        if !dir.exists() {
-            continue;
-        }
-
-        for entry in WalkDir::new(&dir)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            if path.extension().and_then(|ext| ext.to_str()) != Some("desktop") {
-                continue;
-            }
-
-            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
-                if seen_ids.insert(file_name.to_string()) {
-                    if let Some(entry) = parse_desktop_file(path) {
-                        entries.push(entry);
-                    }
-                }
-            }
-        }
-    }
-
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-    entries
 }
 
 fn parse_desktop_file(path: &std::path::Path) -> Option<DesktopEntry> {
