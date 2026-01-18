@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk4::{
@@ -81,31 +81,32 @@ fn setup_click_to_close(window: &ApplicationWindow) {
 
 fn load_styles() {
     let provider = gtk4::CssProvider::new();
+    let mut css_loaded = false;
 
     if let Ok(home) = std::env::var("HOME") {
-        let user_css = std::path::PathBuf::from(&home)
+        let user_css: PathBuf = PathBuf::from(home)
             .join(".config")
             .join(APP_NAME)
             .join("default.css");
 
-        if Path::new(&user_css).exists() {
+        if user_css.exists() {
             provider.load_from_path(&user_css);
-        } else {
-            let default_css = "resources/default.css";
-            if Path::new(default_css).exists() {
-                provider.load_from_path(default_css);
-            }
-        } else {
-            false
+            css_loaded = true;
         }
-    } else {
-        false
-    };
+    }
 
     if !css_loaded {
-        provider.load_from_bytes(&gtk4::glib::Bytes::from_static(
-            include_str!("../resources/default.css").as_bytes(),
-        ));
+        let default_css = Path::new("resources/default.css");
+        if default_css.exists() {
+            provider.load_from_path(default_css);
+            css_loaded = true;
+        }
+    }
+
+    if !css_loaded {
+        provider.load_from_bytes(&gtk4::glib::Bytes::from_static(include_bytes!(
+            "../resources/default.css"
+        )));
     }
 
     gtk4::style_context_add_provider_for_display(
