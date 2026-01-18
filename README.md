@@ -1,6 +1,5 @@
 # Hypr - Bucket 🪣
 
-> ❗️ **WIP** ❗️
 >
 > Lightweight and customizable application launcher for hyprland
 
