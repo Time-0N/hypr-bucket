@@ -8,13 +8,12 @@ pub fn search_apps(query: &str, apps: &[DesktopEntry]) -> Vec<DesktopEntry> {
     }
 
     let matcher = SkimMatcherV2::default().ignore_case();
-    let query_lower = query.to_lowercase();
 
     let mut results: Vec<_> = apps
         .iter()
         .filter_map(|app| {
             matcher
-                .fuzzy_match(&app.name, &query_lower)
+                .fuzzy_match(&app.name, query)
                 .map(|score| (score, app.clone()))
         })
         .collect();
