@@ -45,7 +45,7 @@ fn application_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-pub fn spawn_load_entries(sender: Sender<LoaderMsg>) {
+pub fn spawn_load_entries(sender: Sender<LoaderMsg>, pinned: HashSet<String>) {
     thread::spawn(move || {
         let mut cached_map: HashMap<String, DesktopEntry> = HashMap::new();
         let mut cached_ids = HashSet::new();
@@ -63,7 +63,19 @@ pub fn spawn_load_entries(sender: Sender<LoaderMsg>) {
                     cached_map.insert(app.id.clone(), app.clone());
                     unique.push(app);
                 }
-                let _ = sender.send_blocking(LoaderMsg::Batch(unique));
+
+                let mut pinned_first = Vec::new();
+                let mut others = Vec::new();
+                for app in unique {
+                    if pinned.contains(&app.id) {
+                        pinned_first.push(app);
+                    } else {
+                        others.push(app);
+                    }
+                }
+                pinned_first.extend(others);
+
+                let _ = sender.send_blocking(LoaderMsg::Batch(pinned_first));
             }
         }
 

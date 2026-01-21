@@ -1,6 +1,6 @@
 # Maintainer: Time ON <timeon.haas@gmail.com>
 pkgname=hypr-bucket
-pkgver=1.0.3
+pkgver=1.1.3
 pkgrel=1
 pkgdesc="Lightweight and customizable application launcher for Hyprland"
 arch=('x86_64' 'aarch64')
