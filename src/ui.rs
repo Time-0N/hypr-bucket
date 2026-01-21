@@ -1,44 +1,254 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet, VecDeque},
+    rc::Rc,
+    time::Duration,
+};
 
+use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use gtk4::{
     gio::ListStore,
     glib::{self, Object},
     prelude::*,
     subclass::prelude::*,
-    Box, Entry, GridView, ListItem, ListScrollFlags, Orientation, ScrolledWindow,
-    SignalListItemFactory, SingleSelection,
+    Box, CustomFilter, CustomSorter, Entry, FilterChange, FilterListModel, GridView, ListItem,
+    ListScrollFlags, Orientation, ScrolledWindow, SignalListItemFactory, SingleSelection,
+    SortListModel, SorterChange,
 };
 
 pub mod components;
 pub use components::{create_app_row, populate_app_row};
 
-use crate::desktop::{DesktopEntry, LoaderMsg};
+use crate::{
+    config::Config,
+    desktop::{DesktopEntry, LoaderMsg},
+};
 
-#[derive(Default)]
-struct RebuildTimer {
-    id: Option<glib::SourceId>,
-}
+const SCORE_NO_MATCH: i64 = i64::MIN;
+const BATCH_CHUNK: usize = 150;
+const SAVE_PINS_DEBOUNCE_MS: u64 = 200;
 
-type EntryStore = Rc<RefCell<HashMap<String, DesktopEntry>>>;
+type ObjById = Rc<RefCell<HashMap<String, AppEntryObject>>>;
 
 #[derive(Clone)]
-pub struct UiRebuildController {
-    rebuild: Rc<dyn Fn()>,
+pub struct UiController {
+    base: ListStore,
+    by_id: ObjById,
+    query: Rc<RefCell<String>>,
+    pinned: Rc<RefCell<HashSet<String>>>,
+    filter: CustomFilter,
+    sorter: CustomSorter,
+    grid_view: glib::WeakRef<GridView>,
+    selection_guard: Rc<Cell<bool>>,
+    pins_save_source: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
-impl UiRebuildController {
-    pub fn new(rebuild: impl Fn() + 'static) -> Self {
-        Self {
-            rebuild: Rc::new(rebuild),
+impl UiController {
+    pub fn set_query(&self, new_query: String) {
+        let was_empty = self.query.borrow().is_empty();
+
+        let prev_selected_id = self.selected_app_id();
+
+        *self.query.borrow_mut() = new_query.clone();
+        self.update_scores(&new_query);
+
+        self.filter.changed(FilterChange::Different);
+        self.sorter.changed(SorterChange::Different);
+
+        if new_query.is_empty() && !was_empty {
+            if let Some(grid_view) = self.grid_view.upgrade() {
+                if let Some(model) = grid_view.model() {
+                    if let Some(selection) = model.downcast_ref::<SingleSelection>() {
+                        if selection.n_items() > 0 {
+                            self.selection_guard.set(true);
+                            selection.set_selected(0);
+                            self.selection_guard.set(false);
+                            grid_view.scroll_to(0, ListScrollFlags::NONE, None);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        self.reselect_by_id(prev_selected_id);
+    }
+
+    pub fn pinned_snapshot(&self) -> HashSet<String> {
+        self.pinned.borrow().iter().cloned().collect()
+    }
+
+    pub fn toggle_pin(&self, app_id: &str) -> bool {
+        let prev_selected_id = self.selected_app_id();
+
+        let now_pinned = {
+            let mut pinned = self.pinned.borrow_mut();
+            if pinned.remove(app_id) {
+                false
+            } else {
+                pinned.insert(app_id.to_string());
+                true
+            }
+        };
+
+        self.request_save_pins();
+        self.sorter.changed(SorterChange::Different);
+        self.reselect_by_id(prev_selected_id);
+
+        now_pinned
+    }
+
+    pub fn cleanup_stale_pins(&self) {
+        let existing: HashSet<String> = self.by_id.borrow().keys().cloned().collect();
+
+        let changed = {
+            let mut pinned = self.pinned.borrow_mut();
+            let before = pinned.len();
+            pinned.retain(|id| existing.contains(id));
+            pinned.len() != before
+        };
+
+        if changed {
+            self.request_save_pins();
+            self.sorter.changed(SorterChange::Different);
         }
     }
 
-    pub fn rebuild(&self) {
-        (self.rebuild)();
+    fn request_save_pins(&self) {
+        if let Some(old) = self.pins_save_source.borrow_mut().take() {
+            old.remove();
+        }
+
+        let pinned_vec: Vec<String> = self.pinned.borrow().iter().cloned().collect();
+
+        let mut pinned_opt = Some(pinned_vec);
+
+        let source_id =
+            glib::timeout_add_local(Duration::from_millis(SAVE_PINS_DEBOUNCE_MS), move || {
+                if let Some(pins) = pinned_opt.take() {
+                    Config { pinned: pins }.save();
+                }
+                glib::ControlFlow::Break
+            });
+
+        *self.pins_save_source.borrow_mut() = Some(source_id);
+    }
+
+    pub fn upsert_entry(&self, entry: DesktopEntry) {
+        let id = entry.id.clone();
+
+        let query = self.query.borrow().clone();
+        let score = compute_score(&entry.name, &query);
+        let obj = AppEntryObject::new(entry, score);
+
+        if self.by_id.borrow().contains_key(&id) {
+            if let Some(idx) = find_in_base(&self.base, &id) {
+                self.base.remove(idx);
+                self.base.insert(idx, &obj);
+            } else {
+                self.base.append(&obj);
+            }
+        } else {
+            self.base.append(&obj);
+        }
+
+        self.by_id.borrow_mut().insert(id, obj);
+    }
+
+    pub fn remove_ids<I>(&self, ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut pins_changed = false;
+
+        for id in ids {
+            self.by_id.borrow_mut().remove(&id);
+            if let Some(idx) = find_in_base(&self.base, &id) {
+                self.base.remove(idx);
+            }
+            if self.pinned.borrow_mut().remove(&id) {
+                pins_changed = true;
+            }
+        }
+
+        if pins_changed {
+            self.request_save_pins();
+            self.sorter.changed(SorterChange::Different);
+        }
+    }
+
+    fn update_scores(&self, query: &str) {
+        let matcher = SkimMatcherV2::default().ignore_case();
+
+        for i in 0..self.base.n_items() {
+            let Some(item) = self.base.item(i) else {
+                continue;
+            };
+            let Ok(obj) = item.downcast::<AppEntryObject>() else {
+                continue;
+            };
+
+            let score = if query.is_empty() {
+                0
+            } else {
+                matcher
+                    .fuzzy_match(&*obj.name_ref(), query)
+                    .unwrap_or(SCORE_NO_MATCH)
+            };
+
+            obj.set_score(score);
+        }
+    }
+
+    fn selected_app_id(&self) -> Option<String> {
+        let grid_view = self.grid_view.upgrade()?;
+        let model = grid_view.model()?;
+        let selection = model.downcast_ref::<SingleSelection>()?;
+        let item = selection.selected_item()?;
+        let obj = item.downcast::<AppEntryObject>().ok()?;
+        let id = obj.id_ref().to_string();
+        Some(id)
+    }
+
+    fn reselect_by_id(&self, want_id: Option<String>) {
+        let Some(want_id) = want_id else { return };
+
+        let Some(grid_view) = self.grid_view.upgrade() else {
+            return;
+        };
+        let Some(model) = grid_view.model() else {
+            return;
+        };
+        let Some(selection) = model.downcast_ref::<SingleSelection>() else {
+            return;
+        };
+        let Some(list_model) = selection.model() else {
+            return;
+        };
+
+        for idx in 0..list_model.n_items() {
+            let Some(item) = list_model.item(idx) else {
+                continue;
+            };
+            let Ok(obj) = item.downcast::<AppEntryObject>() else {
+                continue;
+            };
+
+            if &*obj.id_ref() == want_id {
+                self.selection_guard.set(true);
+                selection.set_selected(idx);
+                self.selection_guard.set(false);
+                grid_view.scroll_to(idx, ListScrollFlags::NONE, None);
+                return;
+            }
+        }
     }
 }
 
-pub fn build_content() -> (Box, ListStore, UiRebuildController) {
+pub fn build_content() -> (Box, UiController) {
+    let selection_guard = Rc::new(Cell::new(false));
+    let pins_save_source = Rc::new(RefCell::new(None));
+
     let container = Box::new(Orientation::Vertical, 0);
     container.set_hexpand(false);
     container.set_vexpand(false);
@@ -47,41 +257,104 @@ pub fn build_content() -> (Box, ListStore, UiRebuildController) {
     let (search_box, search_entry) = create_search_box();
     container.append(&search_box);
 
-    let store: EntryStore = Rc::new(RefCell::new(HashMap::new()));
+    let base = ListStore::new::<AppEntryObject>();
+    let by_id: ObjById = Rc::new(RefCell::new(HashMap::new()));
 
-    let (list_view, model) = create_virtual_list();
+    let query: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let pinned: Rc<RefCell<HashSet<String>>> =
+        Rc::new(RefCell::new(Config::load().pinned.into_iter().collect()));
+
+    let filter = CustomFilter::new({
+        let query = query.clone();
+        move |obj| {
+            let q = query.borrow();
+            if q.is_empty() {
+                return true;
+            }
+            let entry = obj
+                .downcast_ref::<AppEntryObject>()
+                .expect("AppEntryObject expected");
+            entry.score() != SCORE_NO_MATCH
+        }
+    });
+
+    let filtered = FilterListModel::new(Some(base.clone()), Some(filter.clone()));
+
+    let sorter = CustomSorter::new({
+        let pinned = pinned.clone();
+        let query = query.clone();
+
+        move |a, b| {
+            let a = a
+                .downcast_ref::<AppEntryObject>()
+                .expect("AppEntryObject expected");
+            let b = b
+                .downcast_ref::<AppEntryObject>()
+                .expect("AppEntryObject expected");
+
+            let pinned_set = pinned.borrow();
+            let ap = pinned_set.contains(&*a.id_ref());
+            let bp = pinned_set.contains(&*b.id_ref());
+            drop(pinned_set);
+
+            match bp.cmp(&ap) {
+                std::cmp::Ordering::Equal => {
+                    if ap {
+                        return a.name_key_ref().cmp(&*b.name_key_ref()).into();
+                    }
+
+                    if query.borrow().is_empty() {
+                        a.name_key_ref().cmp(&*b.name_key_ref()).into()
+                    } else {
+                        b.score()
+                            .cmp(&a.score())
+                            .then_with(|| a.name_key_ref().cmp(&*b.name_key_ref()))
+                            .into()
+                    }
+                }
+                other => other.into(),
+            }
+        }
+    });
+
+    let sorted = SortListModel::new(Some(filtered), Some(sorter.clone()));
+
+    let selection = SingleSelection::new(Some(sorted));
+    selection.set_autoselect(true);
+
+    let grid_view = create_virtual_list(&selection);
 
     let scrolled = ScrolledWindow::new();
     scrolled.set_vexpand(true);
     scrolled.set_hexpand(true);
     scrolled.set_min_content_height(400);
     scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);
-    scrolled.set_child(Some(&list_view));
+    scrolled.set_child(Some(&grid_view));
     container.append(&scrolled);
 
     let status_bar = create_status_bar();
     container.append(&status_bar);
 
-    let rebuild_controller = UiRebuildController::new({
-        let model = model.clone();
-        let grid_view = list_view.clone();
-        let store = store.clone();
-        let search_entry = search_entry.clone();
-        move || {
-            let query = search_entry.text().to_string();
-            rebuild_model(&model, &grid_view, &store.borrow(), &query);
-        }
+    let ui = UiController {
+        base,
+        by_id,
+        query,
+        pinned,
+        filter,
+        sorter,
+        grid_view: grid_view.downgrade(),
+        selection_guard,
+        pins_save_source,
+    };
+
+    setup_search(&search_entry, ui.clone());
+
+    glib::idle_add_local_once({
+        let ui = ui.clone();
+        move || start_loader(ui)
     });
 
-    setup_search(
-        &search_entry,
-        &model,
-        &list_view,
-        rebuild_controller.clone(),
-    );
-    start_loader(store.clone(), rebuild_controller.clone());
-
-    (container, model, rebuild_controller)
+    (container, ui)
 }
 
 fn create_search_box() -> (Box, Entry) {
@@ -117,12 +390,7 @@ fn create_status_bar() -> Box {
     status_bar
 }
 
-fn create_virtual_list() -> (GridView, ListStore) {
-    let model = ListStore::new::<AppEntryObject>();
-
-    let selection = SingleSelection::new(Some(model.clone()));
-    selection.set_autoselect(true);
-
+fn create_virtual_list(selection: &SingleSelection) -> GridView {
     let factory = SignalListItemFactory::new();
 
     factory.connect_setup(move |_, list_item| {
@@ -150,7 +418,7 @@ fn create_virtual_list() -> (GridView, ListStore) {
         populate_app_row(&row, &entry_obj);
     });
 
-    let grid_view = GridView::new(Some(selection), Some(factory));
+    let grid_view = GridView::new(Some(selection.clone()), Some(factory));
     grid_view.set_max_columns(1);
     grid_view.set_min_columns(1);
     grid_view.set_single_click_activate(true);
@@ -159,7 +427,7 @@ fn create_virtual_list() -> (GridView, ListStore) {
     setup_selection_scroll(&grid_view);
     setup_activation(&grid_view);
 
-    (grid_view, model)
+    grid_view
 }
 
 fn setup_selection_scroll(grid_view: &GridView) {
@@ -180,172 +448,118 @@ fn setup_selection_scroll(grid_view: &GridView) {
     }
 }
 
-fn setup_search(
-    search_entry: &Entry,
-    model: &ListStore,
-    grid_view: &GridView,
-    ui: UiRebuildController,
-) {
-    let model = model.clone();
-    let grid_view = grid_view.clone();
-    let last_query = Rc::new(RefCell::new(String::new()));
-
+fn setup_search(search_entry: &Entry, ui: UiController) {
     search_entry.connect_changed(move |entry| {
-        let query = entry.text().to_string();
-
-        let was_empty = last_query.borrow().is_empty();
-        let is_empty = query.is_empty();
-        *last_query.borrow_mut() = query;
-
-        ui.rebuild();
-
-        if is_empty && !was_empty && model.n_items() > 0 {
-            if let Some(sel_model) = grid_view.model() {
-                if let Some(selection) = sel_model.downcast_ref::<SingleSelection>() {
-                    selection.set_selected(0);
-                }
-            }
-            grid_view.scroll_to(0, ListScrollFlags::NONE, None);
-        }
+        ui.set_query(entry.text().to_string());
     });
-
     search_entry.grab_focus();
 }
 
 fn setup_activation(grid_view: &GridView) {
     let grid_view_clone = grid_view.clone();
-
-    grid_view.connect_activate(move |_, _| {
-        launch_selected(&grid_view_clone);
-    });
+    grid_view.connect_activate(move |_, _| launch_selected(&grid_view_clone));
 }
 
-fn start_loader(store: EntryStore, ui: UiRebuildController) {
+fn start_loader(ui: UiController) {
+    let done_received = Rc::new(Cell::new(false));
+    let finalized = Rc::new(Cell::new(false));
+
     let (tx, rx) = async_channel::unbounded::<LoaderMsg>();
-    crate::desktop::spawn_load_entries(tx);
+    let pinned_snapshot = ui.pinned_snapshot();
+    crate::desktop::spawn_load_entries(tx, pinned_snapshot);
 
-    let timer = Rc::new(RefCell::new(RebuildTimer::default()));
+    let pending: Rc<RefCell<VecDeque<DesktopEntry>>> = Rc::new(RefCell::new(VecDeque::new()));
+    let draining = Rc::new(Cell::new(false));
 
-    let schedule_rebuild = {
-        let timer = timer.clone();
+    let schedule_drain = {
         let ui = ui.clone();
+        let pending = pending.clone();
+        let draining = draining.clone();
+        let done_received = done_received.clone();
+        let finalized = finalized.clone();
 
         move || {
-            if timer.borrow().id.is_some() {
+            if draining.get() {
                 return;
             }
+            draining.set(true);
 
-            let timer2 = timer.clone();
             let ui2 = ui.clone();
+            let pending2 = pending.clone();
+            let draining2 = draining.clone();
+            let done2 = done_received.clone();
+            let finalized2 = finalized.clone();
 
-            let id = glib::timeout_add_local(Duration::from_millis(50), move || {
-                ui2.rebuild();
+            glib::idle_add_local(move || {
+                let mut q = pending2.borrow_mut();
 
-                timer2.borrow_mut().id = None;
-                glib::ControlFlow::Break
+                for _ in 0..BATCH_CHUNK {
+                    if let Some(entry) = q.pop_front() {
+                        ui2.upsert_entry(entry);
+                    } else {
+                        draining2.set(false);
+
+                        if done2.get() && !finalized2.get() {
+                            finalized2.set(true);
+                            drop(q);
+                            ui2.cleanup_stale_pins();
+                        }
+
+                        return glib::ControlFlow::Break;
+                    }
+                }
+
+                glib::ControlFlow::Continue
             });
-
-            timer.borrow_mut().id = Some(id);
         }
     };
 
     glib::MainContext::default().spawn_local(async move {
         while let Ok(msg) = rx.recv().await {
-            let done = matches!(&msg, LoaderMsg::Done);
+            let done = matches!(msg, LoaderMsg::Done);
 
-            {
-                let mut map = store.borrow_mut();
-                match msg {
-                    LoaderMsg::Batch(apps) => {
-                        for app in apps {
-                            map.insert(app.id.clone(), app);
-                        }
-                    }
-                    LoaderMsg::App(app) => {
-                        map.insert(app.id.clone(), app);
-                    }
-                    LoaderMsg::Remove(ids) => {
-                        for id in ids {
-                            map.remove(&id);
-                        }
-                    }
-                    LoaderMsg::Done => {}
+            match msg {
+                LoaderMsg::Batch(apps) => {
+                    pending.borrow_mut().extend(apps);
+                    schedule_drain();
+                }
+                LoaderMsg::App(app) => ui.upsert_entry(app),
+                LoaderMsg::Remove(ids) => ui.remove_ids(ids),
+                LoaderMsg::Done => {
+                    done_received.set(true);
+                    schedule_drain();
                 }
             }
 
             if done {
-                if let Some(id) = timer.borrow_mut().id.take() {
-                    id.remove();
-                }
-                ui.rebuild();
                 break;
-            } else {
-                schedule_rebuild();
             }
         }
     });
+
+    glib::timeout_add_local(Duration::from_millis(1), || glib::ControlFlow::Break);
 }
 
-fn rebuild_model(
-    model: &ListStore,
-    grid_view: &GridView,
-    store: &HashMap<String, DesktopEntry>,
-    query: &str,
-) {
-    let prev_selected_id: Option<String> = grid_view
-        .model()
-        .and_then(|m| m.downcast::<SingleSelection>().ok())
-        .and_then(|sel| sel.selected_item())
-        .and_then(|item| item.downcast::<AppEntryObject>().ok())
-        .map(|obj| obj.entry().id);
-
-    let mut all: Vec<DesktopEntry> = store.values().cloned().collect();
-
+fn compute_score(name: &str, query: &str) -> i64 {
     if query.is_empty() {
-        all.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        return 0;
     }
 
-    let filtered: Vec<DesktopEntry> = if query.is_empty() {
-        all
-    } else {
-        crate::search::search_apps(query, &all)
-    };
+    SkimMatcherV2::default()
+        .ignore_case()
+        .fuzzy_match(name, query)
+        .unwrap_or(SCORE_NO_MATCH)
+}
 
-    let config = crate::config::Config::load();
-    let (mut pinned, unpinned): (Vec<_>, Vec<_>) = filtered
-        .into_iter()
-        .partition(|app| config.pinned.contains(&app.id));
-
-    pinned.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-    model.remove_all();
-
-    let mut new_selected: Option<u32> = None;
-
-    for (i, app) in pinned.iter().chain(unpinned.iter()).enumerate() {
-        let idx = i as u32;
-
-        if new_selected.is_none() {
-            if let Some(ref want) = prev_selected_id {
-                if app.id == *want {
-                    new_selected = Some(idx);
-                }
-            }
-        }
-
-        model.append(&AppEntryObject::new(app));
-    }
-
-    if let Some(sel_model) = grid_view.model() {
-        if let Some(selection) = sel_model.downcast_ref::<SingleSelection>() {
-            let sel = if model.n_items() == 0 {
-                u32::MAX
-            } else {
-                new_selected.unwrap_or(0)
-            };
-            selection.set_selected(sel);
+fn find_in_base(base: &ListStore, id: &str) -> Option<u32> {
+    for i in 0..base.n_items() {
+        let item = base.item(i)?;
+        let obj = item.downcast::<AppEntryObject>().ok()?;
+        if &*obj.id_ref() == id {
+            return Some(i);
         }
     }
+    None
 }
 
 fn launch_selected(grid_view: &GridView) {
@@ -369,13 +583,17 @@ fn launch_selected(grid_view: &GridView) {
 }
 
 mod imp {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use gtk4::glib::{self, subclass::prelude::*};
 
     #[derive(Default)]
     pub struct AppEntryObject {
         pub entry: RefCell<Option<crate::desktop::DesktopEntry>>,
+        pub id: RefCell<String>,
+        pub name: RefCell<String>,
+        pub name_key: RefCell<String>,
+        pub score: Cell<i64>,
     }
 
     #[glib::object_subclass]
@@ -392,9 +610,14 @@ gtk4::glib::wrapper! {
 }
 
 impl AppEntryObject {
-    pub fn new(entry: &crate::desktop::DesktopEntry) -> Self {
+    pub fn new(entry: crate::desktop::DesktopEntry, score: i64) -> Self {
         let obj: Self = Object::builder().build();
-        obj.imp().entry.replace(Some(entry.clone()));
+        obj.imp().id.replace(entry.id.clone());
+        obj.imp().name.replace(entry.name.clone());
+        // Preserve previous case-insensitive ordering without allocating inside the sorter.
+        obj.imp().name_key.replace(entry.name.to_lowercase());
+        obj.imp().entry.replace(Some(entry));
+        obj.imp().score.set(score);
         obj
     }
 
@@ -405,5 +628,25 @@ impl AppEntryObject {
             .as_ref()
             .expect("Entry should be set")
             .clone()
+    }
+
+    pub fn score(&self) -> i64 {
+        self.imp().score.get()
+    }
+
+    pub fn set_score(&self, score: i64) {
+        self.imp().score.set(score);
+    }
+
+    pub fn id_ref(&self) -> std::cell::Ref<'_, str> {
+        std::cell::Ref::map(self.imp().id.borrow(), |s| s.as_str())
+    }
+
+    pub fn name_ref(&self) -> std::cell::Ref<'_, str> {
+        std::cell::Ref::map(self.imp().name.borrow(), |s| s.as_str())
+    }
+
+    pub fn name_key_ref(&self) -> std::cell::Ref<'_, str> {
+        std::cell::Ref::map(self.imp().name_key.borrow(), |s| s.as_str())
     }
 }

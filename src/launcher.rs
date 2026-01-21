@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::{
     config::Config,
     desktop::DesktopEntry,
-    ui::{AppEntryObject, UiRebuildController},
+    ui::{AppEntryObject, UiController},
 };
 
 fn get_selected_entry(grid_view: &GridView) -> Option<DesktopEntry> {
@@ -89,8 +89,18 @@ fn find_terminal() -> &'static str {
     "sh"
 }
 
-pub fn toggle_pin_selected(grid_view: &GridView, ui_rebuild: Option<&UiRebuildController>) {
+pub fn toggle_pin_selected(grid_view: &GridView, ui: Option<&UiController>) {
     if let Some(entry) = get_selected_entry(grid_view) {
+        if let Some(ui) = ui {
+            let now_pinned = ui.toggle_pin(&entry.id);
+            println!(
+                "{}: {}",
+                if now_pinned { "Pinned" } else { "Unpinned" },
+                entry.name
+            );
+            return;
+        }
+
         let mut config = Config::load();
         let was_pinned = config.pinned.contains(&entry.id);
         config.toggle_pin(&entry.id);
@@ -100,9 +110,5 @@ pub fn toggle_pin_selected(grid_view: &GridView, ui_rebuild: Option<&UiRebuildCo
             if was_pinned { "Unpinned" } else { "Pinned" },
             entry.name
         );
-
-        if let Some(ui) = ui_rebuild {
-            ui.rebuild();
-        }
     }
 }

@@ -7,7 +7,6 @@ mod config;
 mod desktop;
 mod keybinds;
 mod launcher;
-mod search;
 mod single_instance;
 mod ui;
 

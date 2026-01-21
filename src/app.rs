@@ -30,7 +30,7 @@ pub fn build_ui(app: &Application) {
     wrapper.set_overflow(gtk4::Overflow::Hidden);
     wrapper.add_css_class("hyprbucket-wrapper");
 
-    let (content, _model, rebuild_controller) = ui::build_content();
+    let (content, ui_controller) = ui::build_content();
     content.add_css_class("hyprbucket-panel");
 
     wrapper.append(&content);
@@ -40,7 +40,7 @@ pub fn build_ui(app: &Application) {
 
     setup_click_to_close(&window);
     setup_mouse_motion_tracking(&window, grid_view.as_ref());
-    keybinds::setup_keybinds(&window, grid_view.as_ref(), Some(rebuild_controller));
+    keybinds::setup_keybinds(&window, grid_view.as_ref(), Some(ui_controller));
 
     window.present();
 }
