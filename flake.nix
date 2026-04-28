@@ -1,16 +1,36 @@
 {
-  description = "hypr-bucket — lightweight application launcher for Hyprland";
+  description = "hypr-bucket dev environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-      in {
+
+        runtimeLibs = with pkgs; [
+          wayland
+          libxkbcommon
+          fontconfig
+          freetype
+          vulkan-loader
+          mesa
+          libx11
+          libxcursor
+          libxi
+          libxrandr
+        ];
+      in
+      {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "hypr-bucket";
           version = "1.1.3";
@@ -21,28 +41,15 @@
 
           nativeBuildInputs = with pkgs; [
             pkg-config
-            wrapGAppsHook4
           ];
 
-          buildInputs = with pkgs; [
-            gtk4
-            gtk4-layer-shell
-            glib
-            wayland
-            libxkbcommon
-          ];
-
-          # Needed so gtk4-layer-shell links correctly at runtime
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
-            gtk4-layer-shell
-            wayland
-          ]);
+          buildInputs = runtimeLibs;
 
           meta = with pkgs.lib; {
             description = "Lightweight and customizable application launcher for Hyprland";
             homepage = "https://github.com/Time-0N/hypr-bucket";
             license = licenses.gpl3Only;
-            maintainers = [];
+            maintainers = [ Time-0N ];
             platforms = platforms.linux;
             mainProgram = "hbucket";
           };
@@ -64,13 +71,11 @@
             rustfmt
           ];
 
-          buildInputs = with pkgs; [
-            gtk4
-            gtk4-layer-shell
-            glib
-            wayland
-            libxkbcommon
-          ];
+          buildInputs = runtimeLibs;
+
+          shellHook = ''
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath runtimeLibs}"
+          '';
         };
       }
     );
